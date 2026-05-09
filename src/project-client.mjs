@@ -148,8 +148,45 @@ const PROJECT_QUERY = `
   }
 `;
 
+const PROJECT_FIELDS_QUERY = `
+  query($login: String!, $projectNumber: Int!) {
+    user(login: $login) {
+      projectV2(number: $projectNumber) {
+        id
+        title
+        fields(first: 50) {
+          nodes {
+            ... on ProjectV2Field {
+              id
+              name
+              dataType
+            }
+            ... on ProjectV2SingleSelectField {
+              id
+              name
+              dataType
+              options {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
 async function loadProject() {
   const data = await graphql(PROJECT_QUERY, {
+    login: owner,
+    projectNumber,
+  });
+  return data.user.projectV2;
+}
+
+async function loadProjectFieldContext() {
+  const data = await graphql(PROJECT_FIELDS_QUERY, {
     login: owner,
     projectNumber,
   });
@@ -283,8 +320,8 @@ async function updateTextField({ projectId, itemId, field, text }) {
   });
 }
 
-async function addIssueToProject(issueNodeId) {
-  const project = await loadProject();
+async function addIssueToProject(issueNodeId, projectId) {
+  const resolvedProjectId = projectId || (await loadProjectFieldContext()).id;
   const mutation = `
     mutation($projectId: ID!, $contentId: ID!) {
       addProjectV2ItemById(
@@ -301,16 +338,87 @@ async function addIssueToProject(issueNodeId) {
   `;
 
   const data = await graphql(mutation, {
-    projectId: project.id,
+    projectId: resolvedProjectId,
     contentId: issueNodeId,
   });
 
   return data.addProjectV2ItemById.item.id;
 }
 
-async function updateProjectItemFields(itemId, updates) {
+function buildBatchFieldUpdateMutation(projectId, itemId, entries, fieldsByName) {
+  const variableDefinitions = ["$projectId: ID!", "$itemId: ID!"];
+  const mutationCalls = [];
+  const variables = { projectId, itemId };
+
+  entries.forEach(([fieldName, value], index) => {
+    const field = requireField(fieldsByName, fieldName);
+    const fieldVar = `fieldId${index}`;
+    const valueVar = `value${index}`;
+
+    variables[fieldVar] = field.id;
+    variableDefinitions.push(`$${fieldVar}: ID!`);
+
+    if (field.dataType === "SINGLE_SELECT" || field.options) {
+      const option = field.options.find((o) => o.name === String(value));
+      if (!option) {
+        throw new Error(
+          `Option "${value}" not found in field "${field.name}"`
+        );
+      }
+
+      variables[valueVar] = option.id;
+      variableDefinitions.push(`$${valueVar}: String!`);
+      mutationCalls.push(`
+        f${index}: updateProjectV2ItemFieldValue(
+          input: {
+            projectId: $projectId
+            itemId: $itemId
+            fieldId: $${fieldVar}
+            value: {
+              singleSelectOptionId: $${valueVar}
+            }
+          }
+        ) {
+          projectV2Item {
+            id
+          }
+        }
+      `);
+      return;
+    }
+
+    variables[valueVar] = String(value);
+    variableDefinitions.push(`$${valueVar}: String!`);
+    mutationCalls.push(`
+      f${index}: updateProjectV2ItemFieldValue(
+        input: {
+          projectId: $projectId
+          itemId: $itemId
+          fieldId: $${fieldVar}
+          value: {
+            text: $${valueVar}
+          }
+        }
+      ) {
+        projectV2Item {
+          id
+        }
+      }
+    `);
+  });
+
+  const mutation = `
+    mutation(${variableDefinitions.join(", ")}) {
+      ${mutationCalls.join("\n")}
+    }
+  `;
+
+  return { mutation, variables };
+}
+
+async function updateProjectItemFields(itemId, updates, projectContext = null) {
   const startedAt = Date.now();
-  const project = await loadProject();
+  const project = projectContext || (await loadProjectFieldContext());
   const { fieldsByName } = buildFieldMaps(project);
   const entries = Object.entries(updates);
 
@@ -331,38 +439,36 @@ async function updateProjectItemFields(itemId, updates) {
       fieldType: field.dataType,
       value: String(value),
     });
+  }
 
-    if (field.dataType === "SINGLE_SELECT" || field.options) {
-      await updateSingleSelectField({
-        projectId: project.id,
-        itemId,
-        field,
-        optionName: String(value),
-      });
-    } else {
-      await updateTextField({
-        projectId: project.id,
-        itemId,
-        field,
-        text: String(value),
-      });
-    }
+  const { mutation, variables } = buildBatchFieldUpdateMutation(
+    project.id,
+    itemId,
+    entries,
+    fieldsByName
+  );
 
+  await graphql(mutation, variables);
+
+  for (const [fieldName] of entries) {
     logProjectClient("update_field_done", {
       itemId,
       fieldName,
-      durationMs: Date.now() - fieldStartedAt,
+      durationMs: null,
+      mode: "batched",
     });
   }
 
   logProjectClient("update_fields_done", {
     itemId,
     durationMs: Date.now() - startedAt,
+    mode: "batched",
   });
 }
 
 export {
   loadProject,
+  loadProjectFieldContext,
   buildFieldMaps,
   requireField,
   getItemFields,

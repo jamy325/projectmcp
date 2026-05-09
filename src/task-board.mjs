@@ -15,6 +15,7 @@ import {
 } from "./github-client.mjs";
 import {
   addIssueToProject,
+  loadProjectFieldContext,
   loadProject,
   buildFieldMaps,
   requireField,
@@ -373,6 +374,7 @@ async function createTask(input) {
   let issue = null;
   let projectItemId = null;
   let failedStep = null;
+  let projectContext = null;
 
   logCreateTask("start", {
     operationId,
@@ -403,19 +405,26 @@ async function createTask(input) {
       { labelCount: 1 }
     );
 
+    failedStep = "load_project_context";
+    projectContext = await measureCreateTaskStep(
+      operationId,
+      "load_project_context",
+      () => loadProjectFieldContext()
+    );
+
     failedStep = "add_issue_to_project";
     projectItemId = await measureCreateTaskStep(
       operationId,
       "add_issue_to_project",
-      () => addIssueToProject(issue.node_id),
-      { issueNumber: issue.number }
+      () => addIssueToProject(issue.node_id, projectContext.id),
+      { issueNumber: issue.number, projectId: projectContext.id }
     );
 
     failedStep = "update_project_fields";
     await measureCreateTaskStep(
       operationId,
       "update_project_fields",
-      () => updateProjectItemFields(projectItemId, fields),
+      () => updateProjectItemFields(projectItemId, fields, projectContext),
       {
         issueNumber: issue.number,
         projectItemId,
