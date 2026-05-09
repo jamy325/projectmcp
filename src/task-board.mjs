@@ -42,6 +42,46 @@ const SIZE_OPTIONS = new Set(["XS", "S", "M", "L", "XL"]);
 
 /* --------------- helpers --------------- */
 
+function logCreateTask(event, data = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "create_task",
+      event,
+      ...data,
+    })
+  );
+}
+
+async function measureCreateTaskStep(operationId, step, fn, extra = {}) {
+  const startedAt = Date.now();
+  logCreateTask("step_start", {
+    operationId,
+    step,
+    ...extra,
+  });
+
+  try {
+    const result = await fn();
+    logCreateTask("step_done", {
+      operationId,
+      step,
+      durationMs: Date.now() - startedAt,
+      ...extra,
+    });
+    return result;
+  } catch (error) {
+    logCreateTask("step_error", {
+      operationId,
+      step,
+      durationMs: Date.now() - startedAt,
+      error: error.message || String(error),
+      ...extra,
+    });
+    throw error;
+  }
+}
+
 async function auditComment(issueNumber, body) {
   return addIssueComment(issueNumber, `[MCP] ${body}`);
 }
@@ -306,6 +346,10 @@ async function transitionTask(issueNumber, updates, comment) {
 }
 
 async function createTask(input) {
+  const operationId = `ct_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  const startedAt = Date.now();
   const normalized = normalizeCreateTaskInput(input);
   const title = formatIssueTitle(normalized.title);
   const body = buildCreateTaskIssueBody(normalized);
@@ -327,26 +371,82 @@ async function createTask(input) {
   }
 
   let issue = null;
+  let projectItemId = null;
+  let failedStep = null;
+
+  logCreateTask("start", {
+    operationId,
+    repo: normalized.repo,
+    title,
+    baseBranch: normalized.baseBranch,
+    targetBranch: normalized.targetBranch || null,
+    priority: normalized.priority,
+    size: normalized.size,
+    acceptanceCriteriaCount: normalized.acceptanceCriteria.length,
+    technicalConstraintsCount: normalized.technicalConstraints.length,
+    allowedPathsCount: normalized.allowedPaths.length,
+    forbiddenPathsCount: normalized.forbiddenPaths.length,
+    testCommandsCount: normalized.testCommands.length,
+  });
 
   try {
-    issue = await createIssue({
-      title,
-      body,
-      labels: ["state:needs-pm"],
-    });
+    failedStep = "create_issue";
+    issue = await measureCreateTaskStep(
+      operationId,
+      "create_issue",
+      () =>
+        createIssue({
+          title,
+          body,
+          labels: ["state:needs-pm"],
+        }),
+      { labelCount: 1 }
+    );
 
-    const projectItemId = await addIssueToProject(issue.node_id);
-    await updateProjectItemFields(projectItemId, fields);
+    failedStep = "add_issue_to_project";
+    projectItemId = await measureCreateTaskStep(
+      operationId,
+      "add_issue_to_project",
+      () => addIssueToProject(issue.node_id),
+      { issueNumber: issue.number }
+    );
 
-    await auditComment(
-      issue.number,
-      `## PM 任务已创建
+    failedStep = "update_project_fields";
+    await measureCreateTaskStep(
+      operationId,
+      "update_project_fields",
+      () => updateProjectItemFields(projectItemId, fields),
+      {
+        issueNumber: issue.number,
+        projectItemId,
+        fieldCount: Object.keys(fields).length,
+        fieldNames: Object.keys(fields),
+      }
+    );
+
+    failedStep = "add_audit_comment";
+    await measureCreateTaskStep(
+      operationId,
+      "add_audit_comment",
+      () =>
+        auditComment(
+          issue.number,
+          `## PM 任务已创建
 - Assigned Bot: pm-bot
 - Stage: requirement
 - Status: Ready
 - Need PM Action: yes
 - 时间：${new Date().toISOString()}`
+        ),
+      { issueNumber: issue.number }
     );
+
+    logCreateTask("success", {
+      operationId,
+      issueNumber: issue.number,
+      projectItemId,
+      durationMs: Date.now() - startedAt,
+    });
 
     return {
       success: true,
@@ -369,6 +469,15 @@ async function createTask(input) {
         // Ignore secondary audit failure and surface the original error.
       }
     }
+
+    logCreateTask("failure", {
+      operationId,
+      failedStep,
+      issueNumber: issue?.number || null,
+      projectItemId,
+      durationMs: Date.now() - startedAt,
+      error: error.message || String(error),
+    });
 
     throw error;
   }

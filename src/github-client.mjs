@@ -8,6 +8,11 @@ import { owner, repo, token } from "./config.mjs";
 
 const REST_BASE = "https://api.github.com";
 const GRAPHQL_URL = "https://api.github.com/graphql";
+const DEBUG_HTTP = process.env.AI_TEAM_DEBUG_HTTP === "1";
+const SLOW_REQUEST_MS = parseInt(
+  process.env.AI_TEAM_SLOW_REQUEST_MS || "1500",
+  10
+);
 const API_HEADERS = Object.freeze({
   Authorization: `Bearer ${token}`,
   Accept: "application/vnd.github+json",
@@ -17,7 +22,40 @@ const API_HEADERS = Object.freeze({
 
 /* --------------- low-level --------------- */
 
+function shouldLogGitHubCall({ kind, method, durationMs, ok }) {
+  if (DEBUG_HTTP) return true;
+  if (!ok) return true;
+  if (kind === "graphql-mutation") return true;
+  if (kind === "rest" && method !== "GET") return true;
+  return durationMs >= SLOW_REQUEST_MS;
+}
+
+function summarizeGraphqlOperation(query) {
+  if (query.includes("addProjectV2ItemById")) return "addProjectV2ItemById";
+  if (query.includes("updateProjectV2ItemFieldValue")) {
+    return "updateProjectV2ItemFieldValue";
+  }
+  if (query.includes("projectV2(number:")) return "loadProject";
+
+  const normalized = query.replace(/\s+/g, " ").trim();
+  const match = normalized.match(/^(query|mutation)\s+([A-Za-z0-9_]+)/);
+  if (match) return match[2];
+  return normalized.slice(0, 80);
+}
+
+function logGitHubCall(payload) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "github-client",
+      ...payload,
+    })
+  );
+}
+
 async function rest(path, options = {}) {
+  const method = options.method || "GET";
+  const startedAt = Date.now();
   const res = await fetch(`${REST_BASE}${path}`, {
     ...options,
     headers: {
@@ -27,6 +65,25 @@ async function rest(path, options = {}) {
   });
 
   const text = await res.text();
+  const durationMs = Date.now() - startedAt;
+
+  if (
+    shouldLogGitHubCall({
+      kind: "rest",
+      method,
+      durationMs,
+      ok: res.ok,
+    })
+  ) {
+    logGitHubCall({
+      kind: "rest",
+      method,
+      path,
+      status: res.status,
+      ok: res.ok,
+      durationMs,
+    });
+  }
 
   if (!res.ok) {
     throw new Error(
@@ -38,6 +95,11 @@ async function rest(path, options = {}) {
 }
 
 async function graphql(query, variables = {}) {
+  const operation = summarizeGraphqlOperation(query);
+  const kind = query.trimStart().startsWith("mutation")
+    ? "graphql-mutation"
+    : "graphql-query";
+  const startedAt = Date.now();
   const res = await fetch(GRAPHQL_URL, {
     method: "POST",
     headers: {
@@ -49,6 +111,25 @@ async function graphql(query, variables = {}) {
   });
 
   const json = await res.json();
+  const durationMs = Date.now() - startedAt;
+  const ok = Boolean(res.ok && !json.errors);
+
+  if (
+    shouldLogGitHubCall({
+      kind,
+      method: "POST",
+      durationMs,
+      ok,
+    })
+  ) {
+    logGitHubCall({
+      kind,
+      operation,
+      status: res.status,
+      ok,
+      durationMs,
+    });
+  }
 
   if (!res.ok || json.errors) {
     throw new Error(

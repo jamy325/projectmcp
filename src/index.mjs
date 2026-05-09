@@ -43,6 +43,51 @@ const TOOLS = [
 
 const AUTH_TOKEN = process.env.MCP_AUTH_TOKEN || "";
 
+function logServerEvent(event, data = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "mcp-server",
+      event,
+      ...data,
+    })
+  );
+}
+
+function summarizeToolArgs(name, args = {}) {
+  if (name === "create_task") {
+    return {
+      title: args.title || null,
+      repo: args.repo || null,
+      baseBranch: args.baseBranch || null,
+      targetBranch: args.targetBranch || null,
+      priority: args.priority || null,
+      size: args.size || null,
+      acceptanceCriteriaCount: Array.isArray(args.acceptanceCriteria)
+        ? args.acceptanceCriteria.length
+        : 0,
+      technicalConstraintsCount: Array.isArray(args.technicalConstraints)
+        ? args.technicalConstraints.length
+        : 0,
+      allowedPathsCount: Array.isArray(args.allowedPaths)
+        ? args.allowedPaths.length
+        : 0,
+      forbiddenPathsCount: Array.isArray(args.forbiddenPaths)
+        ? args.forbiddenPaths.length
+        : 0,
+      testCommandsCount: Array.isArray(args.testCommands)
+        ? args.testCommands.length
+        : 0,
+    };
+  }
+
+  if ("issueNumber" in args) {
+    return { issueNumber: args.issueNumber };
+  }
+
+  return {};
+}
+
 /* --------------- MCP Server factory --------------- */
 
 function createMcpServer() {
@@ -59,10 +104,26 @@ function createMcpServer() {
     const { name, arguments: args } = request.params;
     const tool = TOOLS.find((t) => t.SCHEMA.name === name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
+    const startedAt = Date.now();
+
+    logServerEvent("tool_call_start", {
+      tool: name,
+      ...summarizeToolArgs(name, args || {}),
+    });
 
     try {
-      return await tool.handler(args || {});
+      const result = await tool.handler(args || {});
+      logServerEvent("tool_call_success", {
+        tool: name,
+        durationMs: Date.now() - startedAt,
+      });
+      return result;
     } catch (error) {
+      logServerEvent("tool_call_error", {
+        tool: name,
+        durationMs: Date.now() - startedAt,
+        error: error.message || String(error),
+      });
       return {
         content: [
           { type: "text", text: JSON.stringify({ error: error.message || String(error) }, null, 2) },
@@ -136,7 +197,6 @@ async function main() {
     }
 
     const pathname = parsePath(req);
-
     // Health check — no auth required, minimal output
     if (HEALTH_PATHS.has(pathname) && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -156,6 +216,7 @@ async function main() {
       try {
         await handleMcpRequest(req, res);
       } catch (err) {
+        console.error("handleMcpRequest error:", req.method, pathname, err);
         if (!res.headersSent) {
           res.writeHead(502, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "MCP transport error", detail: err.message }));

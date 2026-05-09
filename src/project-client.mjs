@@ -9,6 +9,17 @@ import { owner, repo, projectNumber } from "./config.mjs";
 
 /* --------------- field value parsing --------------- */
 
+function logProjectClient(event, data = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      scope: "project-client",
+      event,
+      ...data,
+    })
+  );
+}
+
 function readFieldValue(fieldValue) {
   if (!fieldValue) return null;
 
@@ -298,11 +309,28 @@ async function addIssueToProject(issueNodeId) {
 }
 
 async function updateProjectItemFields(itemId, updates) {
+  const startedAt = Date.now();
   const project = await loadProject();
   const { fieldsByName } = buildFieldMaps(project);
+  const entries = Object.entries(updates);
 
-  for (const [fieldName, value] of Object.entries(updates)) {
+  logProjectClient("update_fields_start", {
+    itemId,
+    projectId: project.id,
+    fieldCount: entries.length,
+    fieldNames: entries.map(([fieldName]) => fieldName),
+  });
+
+  for (const [fieldName, value] of entries) {
     const field = requireField(fieldsByName, fieldName);
+    const fieldStartedAt = Date.now();
+
+    logProjectClient("update_field_start", {
+      itemId,
+      fieldName,
+      fieldType: field.dataType,
+      value: String(value),
+    });
 
     if (field.dataType === "SINGLE_SELECT" || field.options) {
       await updateSingleSelectField({
@@ -311,16 +339,26 @@ async function updateProjectItemFields(itemId, updates) {
         field,
         optionName: String(value),
       });
-      continue;
+    } else {
+      await updateTextField({
+        projectId: project.id,
+        itemId,
+        field,
+        text: String(value),
+      });
     }
 
-    await updateTextField({
-      projectId: project.id,
+    logProjectClient("update_field_done", {
       itemId,
-      field,
-      text: String(value),
+      fieldName,
+      durationMs: Date.now() - fieldStartedAt,
     });
   }
+
+  logProjectClient("update_fields_done", {
+    itemId,
+    durationMs: Date.now() - startedAt,
+  });
 }
 
 export {
