@@ -1,0 +1,17 @@
+{
+  "name": "ai-team-mcp",
+  "version": "1.0.0",
+  "description": "MCP Server for AI Dev Team GitHub Project Board operations",
+  "type": "module",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node --env-file=.env src/index.mjs",
+    "inspect": "node --env-file=.env scripts/inspect-project.mjs",
+    "smoke": "node --env-file=.env scripts/smoke-test.mjs"
+  },
+  "keywords": ["mcp", "github", "project-board", "ai-team"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
