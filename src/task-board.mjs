@@ -40,6 +40,8 @@ const DEFAULT_FORBIDDEN_PATHS = [
 ];
 const PRIORITY_OPTIONS = new Set(["P0", "P1", "P2"]);
 const SIZE_OPTIONS = new Set(["XS", "S", "M", "L", "XL"]);
+const CREATE_TASK_JOB_TTL_MS = 24 * 60 * 60 * 1000;
+const createTaskJobs = new Map();
 
 /* --------------- helpers --------------- */
 
@@ -145,6 +147,10 @@ function formatBulletList(items, emptyText = "无") {
 
 function formatTextBlock(items, emptyText) {
   return items.length ? items.join("\n") : emptyText;
+}
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeCreateTaskInput(input = {}) {
@@ -262,6 +268,71 @@ ${formatTextBlock(input.testCommands, "待 PM 确认")}
 ## 12. PM 决策记录
 
 任务已创建，等待 PM 确认需求完整性。`;
+}
+
+function cleanupCreateTaskJobs() {
+  const now = Date.now();
+
+  for (const [jobId, job] of createTaskJobs.entries()) {
+    if (!job.completedAt) continue;
+    if (now - Date.parse(job.completedAt) < CREATE_TASK_JOB_TTL_MS) continue;
+    createTaskJobs.delete(jobId);
+  }
+}
+
+function cloneCreateTaskJob(job) {
+  return JSON.parse(
+    JSON.stringify({
+      jobId: job.jobId,
+      status: job.status,
+      mode: job.mode,
+      totalTasks: job.totalTasks,
+      succeeded: job.succeeded,
+      failed: job.failed,
+      queuedAt: job.queuedAt,
+      startedAt: job.startedAt,
+      completedAt: job.completedAt,
+      durationMs: job.durationMs,
+      firstError: job.firstError,
+      results: job.results,
+    })
+  );
+}
+
+function mergeTaskWithDefaults(task, defaults) {
+  if (!isPlainObject(task)) {
+    throw new Error("each task must be an object");
+  }
+
+  return {
+    ...defaults,
+    ...task,
+  };
+}
+
+function getCreateTaskBatchTasks(input = {}) {
+  if (!Array.isArray(input.tasks)) {
+    return [input];
+  }
+
+  if (input.tasks.length === 0) {
+    throw new Error("tasks must contain at least one task");
+  }
+
+  const defaults = input.defaults == null ? {} : input.defaults;
+  if (!isPlainObject(defaults)) {
+    throw new Error("defaults must be an object");
+  }
+
+  return input.tasks.map((task) => mergeTaskWithDefaults(task, defaults));
+}
+
+function shouldCreateTaskRunAsync(input, taskCount) {
+  if (typeof input.async === "boolean") {
+    return input.async;
+  }
+
+  return taskCount > 1;
 }
 
 function checkPrecondition(task, expected, label) {
@@ -490,6 +561,156 @@ async function createTask(input) {
 
     throw error;
   }
+}
+
+async function createTasksSync(input = {}) {
+  const tasks = getCreateTaskBatchTasks(input);
+  const mode = tasks.length > 1 ? "batch-sync" : "single-sync";
+  const results = [];
+  let succeeded = 0;
+  let failed = 0;
+
+  for (let index = 0; index < tasks.length; index += 1) {
+    const taskInput = tasks[index];
+
+    try {
+      const result = await createTask(taskInput);
+      results.push({
+        index,
+        success: true,
+        title: result.title,
+        issueNumber: result.issueNumber,
+        issueUrl: result.issueUrl,
+        projectItemId: result.projectItemId,
+        fields: result.fields,
+      });
+      succeeded += 1;
+    } catch (error) {
+      results.push({
+        index,
+        success: false,
+        title: typeof taskInput.title === "string" ? taskInput.title : null,
+        error: error.message || String(error),
+      });
+      failed += 1;
+    }
+  }
+
+  return {
+    success: failed === 0,
+    mode,
+    totalTasks: tasks.length,
+    succeeded,
+    failed,
+    results,
+  };
+}
+
+function queueCreateTaskJob(input = {}) {
+  cleanupCreateTaskJobs();
+
+  const tasks = getCreateTaskBatchTasks(input);
+  const jobId = `ctj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const job = {
+    jobId,
+    status: "queued",
+    mode: tasks.length > 1 ? "batch-async" : "single-async",
+    totalTasks: tasks.length,
+    succeeded: 0,
+    failed: 0,
+    queuedAt: new Date().toISOString(),
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+    firstError: null,
+    results: [],
+    tasks,
+  };
+
+  createTaskJobs.set(jobId, job);
+
+  setTimeout(async () => {
+    const currentJob = createTaskJobs.get(jobId);
+    if (!currentJob) return;
+
+    currentJob.status = "running";
+    currentJob.startedAt = new Date().toISOString();
+    const startedAtMs = Date.now();
+
+    for (let index = 0; index < currentJob.tasks.length; index += 1) {
+      const taskInput = currentJob.tasks[index];
+
+      try {
+        const result = await createTask(taskInput);
+        currentJob.results.push({
+          index,
+          success: true,
+          title: result.title,
+          issueNumber: result.issueNumber,
+          issueUrl: result.issueUrl,
+          projectItemId: result.projectItemId,
+          fields: result.fields,
+        });
+        currentJob.succeeded += 1;
+      } catch (error) {
+        const errorMessage = error.message || String(error);
+        currentJob.results.push({
+          index,
+          success: false,
+          title: typeof taskInput.title === "string" ? taskInput.title : null,
+          error: errorMessage,
+        });
+        currentJob.failed += 1;
+        if (!currentJob.firstError) {
+          currentJob.firstError = errorMessage;
+        }
+      }
+    }
+
+    currentJob.completedAt = new Date().toISOString();
+    currentJob.durationMs = Date.now() - startedAtMs;
+
+    if (currentJob.failed === 0) {
+      currentJob.status = "completed";
+    } else if (currentJob.succeeded === 0) {
+      currentJob.status = "failed";
+    } else {
+      currentJob.status = "completed_with_errors";
+    }
+
+    delete currentJob.tasks;
+  }, 0);
+
+  return {
+    success: true,
+    accepted: true,
+    mode: job.mode,
+    jobId,
+    status: job.status,
+    totalTasks: job.totalTasks,
+    queuedAt: job.queuedAt,
+  };
+}
+
+async function createTaskRequest(input = {}) {
+  const tasks = getCreateTaskBatchTasks(input);
+
+  if (shouldCreateTaskRunAsync(input, tasks.length)) {
+    return queueCreateTaskJob(input);
+  }
+
+  return createTasksSync(input);
+}
+
+function getCreateTaskJob(jobId) {
+  cleanupCreateTaskJobs();
+
+  const job = createTaskJobs.get(jobId);
+  if (!job) {
+    throw new Error(`Create task job not found: ${jobId}`);
+  }
+
+  return cloneCreateTaskJob(job);
 }
 
 async function _transitionTaskWithProject(project, issueNumber, updates, comment) {
@@ -777,6 +998,10 @@ async function assertTaskState(issueNumber, expected) {
 
 export {
   createTask,
+  createTaskRequest,
+  createTasksSync,
+  queueCreateTaskJob,
+  getCreateTaskJob,
   listTasks,
   getTaskDetail,
   assertTaskState,

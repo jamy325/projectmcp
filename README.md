@@ -124,6 +124,7 @@ npm run inspect
 ## 已提供工具
 
 - `create_task`
+- `get_create_task_job`
 - `list_pm_tasks`
 - `get_task_detail`
 - `send_to_review`
@@ -135,7 +136,7 @@ npm run inspect
 
 ## create_task
 
-用途：创建新的 AI 开发任务 Issue，并将其加入 `AI Dev Team Board`，初始分配给 `pm-bot` 做需求确认。
+用途：创建一个或多个 AI 开发任务 Issue，并将其加入 `AI Dev Team Board`，初始分配给 `pm-bot` 做需求确认。
 
 ### 输入参数
 
@@ -154,9 +155,19 @@ npm run inspect
   "baseBranch": "string，可选，默认 main",
   "targetBranch": "string，可选",
   "priority": "string，可选，P0 / P1 / P2，默认 P1",
-  "size": "string，可选，XS / S / M / L / XL，默认 M"
+  "size": "string，可选，XS / S / M / L / XL，默认 M",
+  "async": "boolean，可选，单任务默认 false，批量 tasks 默认 true",
+  "defaults": "object，可选，批量模式默认参数",
+  "tasks": ["object，可选，批量任务数组"]
 }
 ```
+
+批量模式说明：
+
+- 如果传入 `tasks`，则进入批量创建模式。
+- `defaults` 会作为每个 task 的默认参数，task 内同名字段优先级更高。
+- 批量模式默认异步执行，避免长时间阻塞 ChatGPT。
+- 单任务仍兼容原有同步调用；如需异步也可以显式传 `async: true`。
 
 参数校验：
 
@@ -260,6 +271,20 @@ npm run inspect
 
 失败时 MCP 返回 `isError: true`，并附带明确错误信息。
 
+异步返回示例：
+
+```json
+{
+  "success": true,
+  "accepted": true,
+  "mode": "batch-async",
+  "jobId": "ctj_xxx",
+  "status": "queued",
+  "totalTasks": 3,
+  "queuedAt": "2026-05-09T10:00:00.000Z"
+}
+```
+
 ### 失败场景说明
 
 - `create_task` 是多步操作，不是事务。
@@ -309,6 +334,61 @@ curl -N -X POST "http://127.0.0.1:8787/mcp" \
   }'
 ```
 
+批量异步创建：
+
+```bash
+curl -N -X POST "http://127.0.0.1:8787/mcp" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "create_task",
+      "arguments": {
+        "async": true,
+        "defaults": {
+          "baseBranch": "main",
+          "priority": "P2",
+          "size": "S"
+        },
+        "tasks": [
+          {
+            "title": "批量任务 1",
+            "requirement": "第一项任务",
+            "acceptanceCriteria": ["任务成功创建"]
+          },
+          {
+            "title": "批量任务 2",
+            "requirement": "第二项任务",
+            "acceptanceCriteria": ["任务成功创建"]
+          }
+        ]
+      }
+    }
+  }'
+```
+
+查询异步任务状态：
+
+```bash
+curl -N -X POST "http://127.0.0.1:8787/mcp" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "get_create_task_job",
+      "arguments": {
+        "jobId": "ctj_xxx"
+      }
+    }
+  }'
+```
+
 Windows 本地调试注意：
 
 - 如果请求体里包含中文，避免用会改写控制台编码的 PowerShell 管道方式临时拼 JSON。
@@ -343,6 +423,12 @@ ChatGPT 网页接入要求：
 8. 不允许输出 `AI_TEAM_GITHUB_TOKEN`。
 9. 所有写操作都必须有 Issue 评论审计记录。
 10. 如果 Project 字段或字段选项不存在，直接返回明确错误。
+
+## 异步说明
+
+- 异步 `create_task` 任务在当前 MCP 进程内执行。
+- 可通过 `get_create_task_job` 查询状态和结果。
+- 如果服务进程重启，内存中的异步 job 状态不会保留。
 
 ## 已知限制
 
