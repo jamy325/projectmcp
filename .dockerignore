@@ -1,0 +1,14 @@
+.git
+.github
+.env
+.env.*
+node_modules
+npm-debug.log*
+*.log
+logs
+coverage
+.vscode
+.idea
+prototypes
+scripts
+README.md

@@ -44,6 +44,69 @@ npm install
 npm start
 ```
 
+## Docker
+
+项目已包含可直接用于 GitHub Actions 构建的容器文件：
+
+- `Dockerfile`
+- `.dockerignore`
+- `.github/workflows/docker-image.yml`
+
+镜像默认基于 `node:22-alpine`，容器内直接运行：
+
+```bash
+node src/index.mjs
+```
+
+容器运行时通过环境变量注入配置，不依赖 `.env` 文件。
+
+### 本地构建
+
+```bash
+docker build -t ai-team-mcp:local .
+```
+
+### 本地运行
+
+```bash
+docker run --rm -p 8787:8787 \
+  -e AI_TEAM_GITHUB_TOKEN=your_token \
+  -e GITHUB_OWNER=jamy325 \
+  -e GITHUB_REPO=aiteamtest \
+  -e GITHUB_PROJECT_NUMBER=1 \
+  ai-team-mcp:local
+```
+
+### GitHub Actions 构建与推送
+
+工作流文件：`.github/workflows/docker-image.yml`
+
+行为：
+
+- `pull_request` 到 `main` 时只验证可以构建，不推送镜像
+- `push` 到 `main` 时构建并推送镜像到 GHCR
+- 推送 `v*` tag 时构建并推送 tag 镜像
+- 支持 `workflow_dispatch` 手动触发
+
+默认镜像仓库：
+
+```text
+ghcr.io/<github-owner>/<github-repo>
+```
+
+按当前仓库 remote，实际会推送到：
+
+```text
+ghcr.io/jamy325/projectmcp
+```
+
+常见 tag：
+
+- `latest`：默认分支
+- `main`：分支构建
+- `sha-<commit>`：提交 SHA
+- `v*`：Git tag
+
 默认地址：
 
 - `http://0.0.0.0:8787/mcp`
