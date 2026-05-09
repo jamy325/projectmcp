@@ -88,6 +88,73 @@ function summarizeToolArgs(name, args = {}) {
   return {};
 }
 
+function attachResponseLifecycleLogging(req, res) {
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+  const pathname = parsePath(req);
+
+  logServerEvent("http_request_start", {
+    requestId,
+    method: req.method,
+    pathname,
+  });
+
+  res.on("finish", () => {
+    logServerEvent("http_response_finish", {
+      requestId,
+      method: req.method,
+      pathname,
+      statusCode: res.statusCode,
+      headersSent: res.headersSent,
+      writableEnded: res.writableEnded,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  res.on("close", () => {
+    logServerEvent("http_response_close", {
+      requestId,
+      method: req.method,
+      pathname,
+      statusCode: res.statusCode,
+      headersSent: res.headersSent,
+      writableEnded: res.writableEnded,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  res.on("error", (error) => {
+    logServerEvent("http_response_error", {
+      requestId,
+      method: req.method,
+      pathname,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt,
+      error: error.message || String(error),
+    });
+  });
+
+  req.on("aborted", () => {
+    logServerEvent("http_request_aborted", {
+      requestId,
+      method: req.method,
+      pathname,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  req.on("close", () => {
+    logServerEvent("http_request_close", {
+      requestId,
+      method: req.method,
+      pathname,
+      durationMs: Date.now() - startedAt,
+    });
+  });
+
+  return { requestId, startedAt, pathname };
+}
+
 /* --------------- MCP Server factory --------------- */
 
 function createMcpServer() {
@@ -149,6 +216,13 @@ const HEALTH_PATHS = new Set(["/health", "/github/health"]);
 /* --------------- HTTP + MCP handler --------------- */
 
 async function handleMcpRequest(req, res) {
+  const pathname = parsePath(req);
+  const startedAt = Date.now();
+  logServerEvent("mcp_transport_start", {
+    method: req.method,
+    pathname,
+  });
+
   const server = createMcpServer();
 
   const transport = new StreamableHTTPServerTransport({
@@ -158,6 +232,14 @@ async function handleMcpRequest(req, res) {
 
   await server.connect(transport);
   await transport.handleRequest(req, res);
+
+  logServerEvent("mcp_transport_done", {
+    method: req.method,
+    pathname,
+    durationMs: Date.now() - startedAt,
+    headersSent: res.headersSent,
+    writableEnded: res.writableEnded,
+  });
 }
 
 /* --------------- CORS --------------- */
@@ -188,6 +270,7 @@ async function main() {
   validateConfig();
 
   const httpServer = http.createServer(async (req, res) => {
+    attachResponseLifecycleLogging(req, res);
     setCorsHeaders(res);
 
     if (req.method === "OPTIONS") {
