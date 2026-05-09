@@ -88,6 +88,21 @@ function summarizeToolArgs(name, args = {}) {
   return {};
 }
 
+function summarizeRequestHeaders(req) {
+  return {
+    host: req.headers.host || "",
+    userAgent: req.headers["user-agent"] || "",
+    accept: req.headers.accept || "",
+    cfRay: req.headers["cf-ray"] || "",
+    xForwardedFor: req.headers["x-forwarded-for"] || "",
+    xForwardedProto: req.headers["x-forwarded-proto"] || "",
+    xForwardedHost: req.headers["x-forwarded-host"] || "",
+    xKoyebBackend: req.headers["x-koyeb-backend"] || "",
+    xKoyebGlb: req.headers["x-koyeb-glb"] || "",
+    via: req.headers.via || "",
+  };
+}
+
 function attachResponseLifecycleLogging(req, res) {
   const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = Date.now();
@@ -97,6 +112,7 @@ function attachResponseLifecycleLogging(req, res) {
     requestId,
     method: req.method,
     pathname,
+    headers: summarizeRequestHeaders(req),
   });
 
   res.on("finish", () => {
@@ -212,6 +228,7 @@ function parsePath(req) {
 
 const MCP_PATHS = new Set(["/mcp", "/github/mcp"]);
 const HEALTH_PATHS = new Set(["/health", "/github/health"]);
+const ROOT_PATHS = new Set(["/", "/github"]);
 
 /* --------------- HTTP + MCP handler --------------- */
 
@@ -280,10 +297,33 @@ async function main() {
     }
 
     const pathname = parsePath(req);
-    // Health check — no auth required, minimal output
-    if (HEALTH_PATHS.has(pathname) && req.method === "GET") {
+    // Root probe — no auth required
+    if (ROOT_PATHS.has(pathname) && (req.method === "GET" || req.method === "HEAD")) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      // minimal status — no internal detail
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          service: "ai-team-mcp",
+          endpoints: {
+            mcp: "/mcp",
+            health: "/health",
+          },
+        })
+      );
+      return;
+    }
+
+    // Health check — no auth required, minimal output
+    if (HEALTH_PATHS.has(pathname) && (req.method === "GET" || req.method === "HEAD")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      if (req.method === "HEAD") {
+        res.end();
+        return;
+      }
       res.end(JSON.stringify({ status: "ok" }));
       return;
     }
