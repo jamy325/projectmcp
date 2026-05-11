@@ -347,6 +347,17 @@ function checkPrecondition(task, expected, label) {
   }
 }
 
+function checkPreconditionOneOf(task, key, allowedValues, label) {
+  const got = task.fields[key];
+  if (!allowedValues.includes(got)) {
+    const expected = allowedValues.map((value) => `"${value}"`).join(" or ");
+    throw new Error(
+      `Precondition failed for ${label}: ` +
+        `expected ${key}=${expected}, got "${got}"`
+    );
+  }
+}
+
 /* --------------- task listing --------------- */
 
 async function listTasks(criteria = {}) {
@@ -761,7 +772,12 @@ async function sendToReview(issueNumber) {
   const fields = getItemFields(item);
 
   // Preconditions
-  checkPrecondition({ fields }, { Status: "Ready" }, "send_to_review");
+  checkPreconditionOneOf(
+    { fields },
+    "Status",
+    ["Ready", "In progress"],
+    "send_to_review"
+  );
   checkPrecondition({ fields }, { "Bot Role": "pm" }, "send_to_review");
   checkPrecondition(
     { fields },
