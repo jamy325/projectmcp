@@ -26,10 +26,10 @@ const SCHEMA = {
       succeeded: { type: "number" },
       failed: { type: "number" },
       queuedAt: { type: "string" },
-      startedAt: { type: ["string", "null"] },
-      completedAt: { type: ["string", "null"] },
-      durationMs: { type: ["number", "null"] },
-      firstError: { type: ["string", "null"] },
+      startedAt: { type: ["string", "null"], description: "可选" },
+      completedAt: { type: ["string", "null"], description: "可选" },
+      durationMs: { type: ["number", "null"], description: "可选" },
+      firstError: { type: ["string", "null"], description: "可选" },
       results: {
         type: "array",
         items: {
@@ -37,11 +37,28 @@ const SCHEMA = {
           properties: {
             index: { type: "number" },
             success: { type: "boolean" },
-            title: { type: ["string", "null"] },
+            title: { type: ["string", "null"], description: "可选" },
             issueNumber: { type: "number" },
             issueUrl: { type: "string" },
             projectItemId: { type: "string" },
             error: { type: "string" },
+            fields: {
+              type: "object",
+              properties: {
+                Status: { type: "string" },
+                "Bot Role": { type: "string" },
+                "Assigned Bot": { type: "string" },
+                Stage: { type: "string" },
+                "Need PM Action": { type: "string" },
+                "Need User Input": { type: "string" },
+                "Review Result": { type: "string" },
+                "Base Branch": { type: "string" },
+                "Target Branch": { type: "string" },
+                Priority: { type: "string" },
+                Size: { type: "string" }
+              },
+              additionalProperties: true
+            }
           },
           required: ["index", "success"],
         },
@@ -55,10 +72,6 @@ const SCHEMA = {
       "succeeded",
       "failed",
       "queuedAt",
-      "startedAt",
-      "completedAt",
-      "durationMs",
-      "firstError",
       "results",
     ],
   },

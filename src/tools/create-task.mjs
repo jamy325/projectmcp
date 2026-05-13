@@ -93,48 +93,53 @@ const TASK_INPUT_SCHEMA = {
 };
 
 const CREATE_TASK_OUTPUT_SCHEMA = {
-  anyOf: [
-    {
-      type: "object",
-      properties: {
-        success: { type: "boolean" },
-        accepted: { type: "boolean" },
-        mode: { type: "string" },
-        jobId: { type: "string" },
-        status: { type: "string" },
-        totalTasks: { type: "number" },
-        queuedAt: { type: "string" },
-      },
-      required: ["success", "accepted", "mode", "jobId", "status", "totalTasks", "queuedAt"],
-    },
-    {
-      type: "object",
-      properties: {
-        success: { type: "boolean" },
-        mode: { type: "string" },
-        totalTasks: { type: "number" },
-        succeeded: { type: "number" },
-        failed: { type: "number" },
-        results: {
-          type: "array",
-          items: {
+  type: "object",
+  properties: {
+    success: { type: "boolean" },
+    accepted: { type: "boolean", description: "仅异步模式返回" },
+    mode: { type: "string" },
+    jobId: { type: "string", description: "仅异步模式返回" },
+    status: { type: "string" },
+    totalTasks: { type: "number" },
+    queuedAt: { type: "string", description: "仅异步模式返回" },
+    succeeded: { type: "number", description: "仅同步模式返回" },
+    failed: { type: "number", description: "仅同步模式返回" },
+    results: {
+      type: "array",
+      description: "仅同步模式返回",
+      items: {
+        type: "object",
+        properties: {
+          index: { type: "number" },
+          success: { type: "boolean" },
+          title: { type: ["string", "null"], description: "可能为空" },
+          issueNumber: { type: "number" },
+          issueUrl: { type: "string" },
+          projectItemId: { type: "string" },
+          error: { type: "string" },
+          fields: {
             type: "object",
             properties: {
-              index: { type: "number" },
-              success: { type: "boolean" },
-              title: { type: ["string", "null"] },
-              issueNumber: { type: "number" },
-              issueUrl: { type: "string" },
-              projectItemId: { type: "string" },
-              error: { type: "string" },
+              Status: { type: "string" },
+              "Bot Role": { type: "string" },
+              "Assigned Bot": { type: "string" },
+              Stage: { type: "string" },
+              "Need PM Action": { type: "string" },
+              "Need User Input": { type: "string" },
+              "Review Result": { type: "string" },
+              "Base Branch": { type: "string" },
+              "Target Branch": { type: "string" },
+              Priority: { type: "string" },
+              Size: { type: "string" }
             },
-            required: ["index", "success"],
-          },
+            additionalProperties: true
+          }
         },
+        required: ["index", "success"],
       },
-      required: ["success", "mode", "totalTasks", "succeeded", "failed", "results"],
     },
-  ],
+  },
+  required: ["success", "mode", "totalTasks"],
 };
 
 const SCHEMA = {
