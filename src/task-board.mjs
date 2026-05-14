@@ -10,7 +10,9 @@ import { owner, repo } from "./config.mjs";
 import {
   addIssueComment,
   createIssue,
+  createPullRequest,
   getIssue,
+  getBranch,
   listIssueComments,
 } from "./github-client.mjs";
 import {
@@ -93,7 +95,7 @@ function ensureConfiguredRepoAllowed() {
   const configuredRepo = `${owner}/${repo}`;
   if (configuredRepo !== ALLOWED_REPO) {
     throw new Error(
-      `create_task is restricted to ${ALLOWED_REPO}, current config is ${configuredRepo}`
+      `This MCP server is restricted to ${ALLOWED_REPO}, current config is ${configuredRepo}`
     );
   }
 }
@@ -203,6 +205,10 @@ function normalizeCreateTaskInput(input = {}) {
 
 function formatIssueTitle(title) {
   return title.startsWith("[AI Task]") ? title : `[AI Task] ${title}`;
+}
+
+function stripAiTaskPrefix(title) {
+  return title.replace(/^\[AI Task\]\s*/i, "").trim();
 }
 
 function buildCreateTaskIssueBody(input) {
@@ -333,6 +339,59 @@ function shouldCreateTaskRunAsync(input, taskCount) {
   }
 
   return taskCount > 1;
+}
+
+function normalizeCreatePrInput(input = {}) {
+  ensureConfiguredRepoAllowed();
+
+  const issueNumber = Number(input.issueNumber);
+  if (!Number.isFinite(issueNumber)) {
+    throw new Error("issueNumber is required");
+  }
+
+  const headBranch = requireNonEmptyString("headBranch", input.headBranch);
+  const summary = normalizeStringArray("summary", input.summary, {
+    required: true,
+  });
+  const tests = normalizeStringArray("tests", input.tests);
+  const baseBranch = normalizeOptionalString(input.baseBranch);
+  const title = normalizeOptionalString(input.title);
+
+  return {
+    issueNumber,
+    headBranch,
+    baseBranch,
+    title,
+    summary,
+    tests,
+    draft: Boolean(input.draft),
+  };
+}
+
+function buildPrBody({ issueNumber, summary, tests }) {
+  const summaryLines = summary.map((item) => `- ${item}`).join("\n");
+  const testLines = (tests.length ? tests : ["Not run"])
+    .map((item) => `- ${item}`)
+    .join("\n");
+
+  return `Refs #${issueNumber}
+
+Summary:
+
+${summaryLines}
+
+Tests:
+
+${testLines}`;
+}
+
+function buildPrTitle({ issueNumber, inputTitle, issueTitle }) {
+  const baseTitle = inputTitle || stripAiTaskPrefix(issueTitle);
+  const suffix = `(#${issueNumber})`;
+  if (baseTitle.includes(suffix)) {
+    return baseTitle;
+  }
+  return `${baseTitle} ${suffix}`;
 }
 
 function checkPrecondition(task, expected, label) {
@@ -724,6 +783,118 @@ function getCreateTaskJob(jobId) {
   return cloneCreateTaskJob(job);
 }
 
+async function assertBranchExists(branchName, kind) {
+  try {
+    return await getBranch(branchName);
+  } catch (error) {
+    if ((error.message || "").includes("404")) {
+      throw new Error(`${kind} branch not found: ${branchName}`);
+    }
+    throw error;
+  }
+}
+
+async function createPr(input = {}) {
+  const normalized = normalizeCreatePrInput(input);
+  const project = await loadProject();
+  const item = findItemByIssueNumber(project, normalized.issueNumber);
+
+  if (!item) {
+    throw new Error(
+      `Issue #${normalized.issueNumber} not found in configured repo/project`
+    );
+  }
+
+  const fields = getItemFields(item);
+
+  checkPrecondition(
+    { fields },
+    { Status: "In progress" },
+    "create_pr"
+  );
+  checkPrecondition(
+    { fields },
+    { "Bot Role": "coder" },
+    "create_pr"
+  );
+  checkPrecondition(
+    { fields },
+    { "Assigned Bot": "code-bot" },
+    "create_pr"
+  );
+  checkPrecondition(
+    { fields },
+    { Stage: "coding" },
+    "create_pr"
+  );
+
+  if (fields["PR URL"]) {
+    throw new Error(
+      `Precondition failed for create_pr: expected PR URL to be empty, got "${fields["PR URL"]}"`
+    );
+  }
+
+  const baseBranch = normalized.baseBranch || fields["Base Branch"] || DEFAULT_BASE_BRANCH;
+
+  await assertBranchExists(normalized.headBranch, "head");
+  await assertBranchExists(baseBranch, "base");
+
+  const title = buildPrTitle({
+    issueNumber: normalized.issueNumber,
+    inputTitle: normalized.title,
+    issueTitle: item.content.title,
+  });
+  const body = buildPrBody({
+    issueNumber: normalized.issueNumber,
+    summary: normalized.summary,
+    tests: normalized.tests,
+  });
+
+  const pr = await createPullRequest({
+    title,
+    head: normalized.headBranch,
+    base: baseBranch,
+    body,
+    draft: normalized.draft,
+  });
+
+  const boardUpdates = {
+    "PR URL": pr.html_url,
+    "Target Branch": normalized.headBranch,
+    Status: "Ready",
+    "Bot Role": "pm",
+    "Assigned Bot": "pm-bot",
+    Stage: "coding",
+    "Need PM Action": "yes",
+    "Review Result": "pending",
+  };
+
+  await updateProjectItemFields(item.id, boardUpdates, project);
+  await auditComment(
+    normalized.issueNumber,
+    `## PR 已创建
+- PR: ${pr.html_url}
+- Head: ${normalized.headBranch}
+- Base: ${baseBranch}
+- Draft: ${normalized.draft}
+- 当前动作：code-bot 已提交 PR，任务交回 pm-bot 决定是否进入 Review
+- 时间：${new Date().toISOString()}`
+  );
+
+  return {
+    success: true,
+    issueNumber: normalized.issueNumber,
+    prNumber: pr.number,
+    prUrl: pr.html_url,
+    title: pr.title,
+    state: pr.state,
+    draft: pr.draft,
+    headBranch: pr.head.ref,
+    baseBranch: pr.base.ref,
+    boardUpdates,
+  };
+}
+
 async function _transitionTaskWithProject(project, issueNumber, updates, comment) {
   const { fieldsByName } = buildFieldMaps(project);
 
@@ -1018,6 +1189,7 @@ export {
   createTasksSync,
   queueCreateTaskJob,
   getCreateTaskJob,
+  createPr,
   listTasks,
   getTaskDetail,
   assertTaskState,

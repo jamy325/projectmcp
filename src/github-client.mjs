@@ -167,6 +167,23 @@ async function getIssue(issueNumber) {
   return rest(`/repos/${owner}/${repo}/issues/${issueNumber}`);
 }
 
+async function getBranch(branchName) {
+  return rest(`/repos/${owner}/${repo}/branches/${encodeURIComponent(branchName)}`);
+}
+
+async function createPullRequest({ title, head, base, body, draft = false }) {
+  return rest(`/repos/${owner}/${repo}/pulls`, {
+    method: "POST",
+    body: JSON.stringify({
+      title,
+      head,
+      base,
+      body,
+      draft,
+    }),
+  });
+}
+
 async function listIssueComments(issueNumber) {
   return rest(
     `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=30`
@@ -188,6 +205,8 @@ export {
   createIssue,
   updateIssue,
   getIssue,
+  getBranch,
+  createPullRequest,
   listIssueComments,
   listOpenIssues,
   listOpenPullRequests,

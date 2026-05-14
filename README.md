@@ -125,6 +125,7 @@ npm run inspect
 
 - `create_task`
 - `get_create_task_job`
+- `create_pr`
 - `list_pm_tasks`
 - `get_task_detail`
 - `send_to_review`
@@ -429,6 +430,89 @@ ChatGPT 网页接入要求：
 - 异步 `create_task` 任务在当前 MCP 进程内执行。
 - 可通过 `get_create_task_job` 查询状态和结果。
 - 如果服务进程重启，内存中的异步 job 状态不会保留。
+
+## create_pr
+
+用途：基于 code-bot 已经 push 到 GitHub 的 `headBranch` 创建 Pull Request，写回 Project 的 `PR URL`，并把任务交回 `pm-bot`。
+
+限制：
+
+- 只创建 PR，不创建 branch。
+- `headBranch` 必须已存在。
+- 不 merge PR。
+- 不 close PR。
+- 不 delete PR。
+
+前置条件：
+
+- `Status = In progress`
+- `Bot Role = coder`
+- `Assigned Bot = code-bot`
+- `Stage = coding`
+- `PR URL` 为空
+
+请求参数：
+
+```json
+{
+  "issueNumber": 123,
+  "headBranch": "codex/t89-execute-circle-command",
+  "baseBranch": "main",
+  "title": "实现 xxx",
+  "summary": [
+    "完成 A",
+    "完成 B"
+  ],
+  "tests": [
+    "npm test"
+  ],
+  "draft": false
+}
+```
+
+规则：
+
+- `baseBranch` 不传时，优先读取 Project 字段 `Base Branch`，没有则使用 `main`
+- PR body 使用 `Refs #issueNumber`
+- 不使用 `Closes #issueNumber`
+- `tests` 为空时，PR body 写 `- Not run`
+
+创建成功后会写回这些 Project 字段：
+
+- `PR URL = pr.html_url`
+- `Target Branch = headBranch`
+- `Status = Ready`
+- `Bot Role = pm`
+- `Assigned Bot = pm-bot`
+- `Stage = coding`
+- `Need PM Action = yes`
+- `Review Result = pending`
+
+示例返回：
+
+```json
+{
+  "success": true,
+  "issueNumber": 123,
+  "prNumber": 45,
+  "prUrl": "https://github.com/jamy325/aiteamtest/pull/45",
+  "title": "实现 xxx (#123)",
+  "state": "open",
+  "draft": false,
+  "headBranch": "codex/t89-execute-circle-command",
+  "baseBranch": "main",
+  "boardUpdates": {
+    "PR URL": "https://github.com/jamy325/aiteamtest/pull/45",
+    "Target Branch": "codex/t89-execute-circle-command",
+    "Status": "Ready",
+    "Bot Role": "pm",
+    "Assigned Bot": "pm-bot",
+    "Stage": "coding",
+    "Need PM Action": "yes",
+    "Review Result": "pending"
+  }
+}
+```
 
 ## 已知限制
 

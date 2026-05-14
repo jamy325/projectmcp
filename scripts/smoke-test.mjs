@@ -57,13 +57,16 @@ async function main() {
   });
 
   // 5. Tool registration
-  await check("task creation tools are registered", async () => {
+  await check("task and pr creation tools are registered", async () => {
     const names = TOOLS.map((tool) => tool?.SCHEMA?.name).filter(Boolean);
     if (!names.includes("create_task")) {
       throw new Error('Tool "create_task" is not registered');
     }
     if (!names.includes("get_create_task_job")) {
       throw new Error('Tool "get_create_task_job" is not registered');
+    }
+    if (!names.includes("create_pr")) {
+      throw new Error('Tool "create_pr" is not registered');
     }
     console.log(`      Registered tools: ${names.join(", ")}`);
   });

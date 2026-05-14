@@ -21,6 +21,7 @@ import { port, validate as validateConfig } from "./config.mjs";
 // Import all tool handlers
 import * as createTask from "./tools/create-task.mjs";
 import * as getCreateTaskJob from "./tools/get-create-task-job.mjs";
+import * as createPr from "./tools/create-pr.mjs";
 import * as listPmTasks from "./tools/list-pm-tasks.mjs";
 import * as getTaskDetail from "./tools/get-task-detail.mjs";
 import * as sendToReview from "./tools/send-to-review.mjs";
@@ -33,6 +34,7 @@ import * as addPmComment from "./tools/add-pm-comment.mjs";
 const TOOLS = [
   createTask,
   getCreateTaskJob,
+  createPr,
   listPmTasks,
   getTaskDetail,
   sendToReview,
@@ -86,6 +88,17 @@ function summarizeToolArgs(name, args = {}) {
   if (name === "get_create_task_job") {
     return {
       jobId: args.jobId || null,
+    };
+  }
+
+  if (name === "create_pr") {
+    return {
+      issueNumber: args.issueNumber ?? null,
+      headBranch: args.headBranch || null,
+      baseBranch: args.baseBranch || null,
+      draft: Boolean(args.draft),
+      summaryCount: Array.isArray(args.summary) ? args.summary.length : 0,
+      testsCount: Array.isArray(args.tests) ? args.tests.length : 0,
     };
   }
 
